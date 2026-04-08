@@ -1,0 +1,10 @@
+{
+    "venvPath": ".",
+    "venv": "MedX",
+    "python.pythonPath": "MedX\\Scripts\\python.exe",
+    "executionEnvironments": [
+        {
+            "root": "src"
+        }
+    ]
+}

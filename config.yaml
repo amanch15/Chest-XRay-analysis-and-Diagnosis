@@ -1,0 +1,25 @@
+# ═══════════════════════════════════════════════════════════════
+#  Medical RAG-Scanner — Central Configuration
+# ═══════════════════════════════════════════════════════════════
+
+# ── Paths ────────────────────────────────────────────────────────
+paths:
+  raw_data:       "data/raw/images"
+  processed_data: "data/processed"
+  checkpoints:    "models/checkpoints"
+  embeddings:     "models/embeddings.npy"
+  image_paths:    "models/image_paths.txt"
+  faiss_index:    "models/faiss_index.bin"
+
+# ── Data Preprocessing ───────────────────────────────────────────
+preprocessing:
+  image_size:     224          # Final image dimensions (224x224)
+  clahe_clip:     2.0          # CLAHE clip limit (contrast enhancement)
+  clahe_grid:     [8, 8]       # CLAHE tile grid size
+  max_samples:    -1           # Max images to process (use -1 for all)
+
+# ── Vision Encoder ───────────────────────────────────────────────
+encoder:
+  model_name:     "openai/clip-vit-base-patch32"  # HuggingFace CLIP
+  batch_size:     32
+  device:         "auto"       # "auto" picks GPU if available, else CPU
