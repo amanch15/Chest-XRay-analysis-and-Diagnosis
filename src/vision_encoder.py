@@ -1,127 +1,130 @@
 # pyre-ignore-all-errors
 """
-vision_encoder.py — CLIP Vision Feature Extractor
-===================================================
-Week 2 Core Module
-
-Steps:
-  1. Load pre-trained CLIP ViT-B/32 from HuggingFace
-  2. Encode each processed image into a 512-dim L2-normalized vector
-  3. Save embeddings.npy + image_paths.txt for FAISS (Week 3)
+vision_encoder.py — BiomedCLIP Feature Extractor
+=================================================
+Phase 1 Upgrade: Swapped generic OpenAI CLIP for Microsoft's BiomedCLIP!
+This processes images via `open_clip` (because it's natively supported there)
+and pumps out highly accurate medical vectors.
 """
 
-import os 
-import numpy as np
-import torch
+import os
 import sys
-from pathlib import Path
+import torch
+import numpy as np
 from PIL import Image
+import open_clip
 from tqdm import tqdm
-from transformers import CLIPProcessor, CLIPModel
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Force the environment variables (like HF_TOKEN) to load immediately
+load_dotenv()
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from utils import get_logger, load_config
 
 logger = get_logger(__name__, log_file="logs/vision_encoder.log")
 
-
-# ─── Device Selection 
-
-def get_device(preference: str = "auto") -> torch.device:
-    if preference == "auto":
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    else:
-        device = torch.device(preference)
-    logger.info(f"Using device: {device}")
-    return device
-
-
-# ─── Model Loader ──────────────────────────────────────────────────────────
-
-def load_clip_model(model_name: str = "openai/clip-vit-base-patch32",
-                    device: torch.device = None):
-    if device is None:
-        device = get_device()
-    logger.info(f"Loading CLIP model: {model_name}")
-    processor = CLIPProcessor.from_pretrained(model_name)
-    model     = CLIPModel.from_pretrained(model_name).to(device)
+def load_biomed_clip(model_name: str, device: torch.device):
+    """Loads the specialized BiomedCLIP model built specifically for medical research."""
+    logger.info(f"Loading Medical Foundation Model: {model_name}")
+    # BiomedCLIP must be loaded via open_clip from the Huggingface Hub
+    model, _, preprocess = open_clip.create_model_and_transforms(model_name)
+    model = model.to(device)
     model.eval()
-    logger.info("CLIP model loaded ✅")
-    return model, processor
+    logger.info("BiomedCLIP successfully locked and loaded into memory!")
+    return model, preprocess
 
-
-# ─── Single Image Embedding ────────────────────────────────────────────────
-
-def encode_image(image_path: str, model, processor,
-                 device: torch.device) -> np.ndarray:
-    """Returns a 512-dim L2-normalized CLIP embedding for one image."""
-    image  = Image.open(image_path).convert("RGB")
-    inputs = processor(images=image, return_tensors="pt").to(device)
-    with torch.no_grad():
-        features = model.get_image_features(**inputs)
-        # Handle variations in HuggingFace transformer versions
-        if hasattr(features, "image_embeds"):
-            features = features.image_embeds
-        elif not isinstance(features, torch.Tensor) and hasattr(features, "pooler_output"):
-            features = features.pooler_output
+def encode_medical_image(image_path: str, model, preprocess, device: torch.device) -> np.ndarray:
+    """Returns a highly nuanced L2-normalized geometric vector from the medical image."""
+    try:
+        image = Image.open(image_path).convert("RGB")
+        input_tensor = preprocess(image).unsqueeze(0).to(device)
+        
+        with torch.no_grad():
+            # Extract the raw visual features
+            features = model.encode_image(input_tensor)
             
-    features = features / features.norm(p=2, dim=-1, keepdim=True)
-    return features.squeeze().cpu().numpy().astype(np.float32)
+        # L2-Normalization (Forces vector length to exactly 1 so Inner Product = Cosine Similarity)
+        features = features / features.norm(p=2, dim=-1, keepdim=True)
+        return features.squeeze().cpu().numpy().astype(np.float32)
+        
+    except Exception as e:
+        logger.error(f"Failed to process image {image_path}: {str(e)}")
+        return None
 
-
-# ─── Batch Embedding Pipeline ──────────────────────────────────────────────
-
-def build_embedding_index(cfg: dict):
-    """
-    Encode all images in data/processed/ and save:
-      - models/embeddings.npy     shape (N, 512)
-      - models/image_paths.txt    one filename per line
-    """
+def build_biomed_embeddings(cfg: dict):
+    """The master pipeline to digest the dataset."""
     processed_dir = Path(cfg["paths"]["processed_data"])
-    models_dir    = Path(cfg["paths"]["checkpoints"]).parent   # models/
-    model_name    = cfg["encoder"]["model_name"]
-    device_pref   = cfg["encoder"]["device"]
-
-    models_dir.mkdir(parents=True, exist_ok=True)
-
-    device           = get_device(device_pref)
-    model, processor = load_clip_model(model_name, device)
-
-    image_files = sorted(
-        list(processed_dir.glob("*.png")) +
-        list(processed_dir.glob("*.jpg"))
-    )
-    logger.info(f"Found {len(image_files)} processed images to encode")
-
-    if not image_files:
-        logger.error(f"No images in {processed_dir}. Run data_loader.py first!")
+    embeddings_out = cfg["paths"]["embeddings"]
+    paths_out      = cfg["paths"]["image_paths"]
+    
+    model_name = cfg["encoder"]["model_name"]
+    device = torch.device(cfg["encoder"]["device"] if cfg["encoder"]["device"] != "auto" 
+                          else "cuda" if torch.cuda.is_available() else "cpu")
+    
+    logger.info(f"Firing up calculations on device: {device}")
+    
+    # Load Model
+    model, preprocess = load_biomed_clip(model_name, device)
+    
+    # Collect Processed Images
+    image_paths = sorted(list(processed_dir.rglob("*.png")) + list(processed_dir.rglob("*.jpg")))
+    if not image_paths:
+        logger.error(f"No processed images found in {processed_dir}!")
         return
 
-    embeddings  = []
-    valid_paths = []
-    skipped     = 0
+    logger.info(f"Found {len(image_paths)} heavily processed X-Rays to analyze.")
+    
+    import pandas as pd
+    import json
+    
+    csv_path = Path("data/raw/images/Data_Entry_2017.csv/Data_Entry_2017.csv")
+    if not csv_path.exists():
+        logger.error(f"FATAL: Ground Truth CSV not found at {csv_path}")
+        return
+        
+    logger.info("Parsing Official NIH Databank Labels...")
+    df = pd.read_csv(csv_path)
+    # Create a giant, ultra-fast dictionary of filename -> Disease Label (e.g., '00006585_007.png' -> 'Atelectasis|Effusion')
+    disease_map = dict(zip(df["Image Index"], df["Finding Labels"]))
+    
+    embeddings = []
+    metadata = []
+    
+    # Process sequentially with progress bar
+    for img_path in tqdm(image_paths, desc="🧠 BiomedCLIP + Ground Truth Analysis"):
+        vector = encode_medical_image(str(img_path), model, preprocess, device)
+        if vector is not None:
+            filename = img_path.name
+            
+            # Lookup the actual patient's clinical diagnosis!
+            # If for some reason the map doesn't have it, default to "No Finding"
+            actual_diagnosis = disease_map.get(filename, "No Finding")
+            
+            embeddings.append(vector)
+            
+            # Phase 3: We now save RICH METADATA instead of just file paths
+            # This is what gets sent to the LLM to cure hallucination!
+            patient_record = {
+                "file_path": str(img_path.relative_to(processed_dir.parent.parent)),
+                "actual_diagnosis": actual_diagnosis
+            }
+            metadata.append(patient_record)
 
-    for img_path in tqdm(image_files, desc="Encoding with CLIP"):
-        try:
-            emb = encode_image(str(img_path), model, processor, device)
-            embeddings.append(emb)
-            valid_paths.append(img_path.name)
-        except Exception as e:
-            logger.warning(f"Skipping {img_path.name}: {e}")
-            skipped += 1
-
-    emb_array = np.vstack(embeddings).astype(np.float32)
-    np.save(str(models_dir / "embeddings.npy"), emb_array)
-
-    with open(str(models_dir / "image_paths.txt"), "w", encoding="utf-8") as f:
-        f.write("\n".join(valid_paths))
-
-    logger.info(f"Done! Saved {len(embeddings)} embeddings | Shape: {emb_array.shape}")
-    logger.info(f"   embeddings.npy  -> {models_dir / 'embeddings.npy'}")
-    logger.info(f"   image_paths.txt -> {models_dir / 'image_paths.txt'}")
-    logger.info(f"   Skipped: {skipped}")
-
+    # Save to Disk
+    embeddings_np = np.vstack(embeddings)
+    os.makedirs(os.path.dirname(embeddings_out), exist_ok=True)
+    np.save(embeddings_out, embeddings_np)
+    
+    # Save the structured Ground Truth JSON 
+    metadata_out = paths_out.replace(".txt", ".json")
+    with open(metadata_out, "w") as f:
+        json.dump(metadata, f, indent=4)
+            
+    logger.info(f"Success! {len(embeddings_np)} vectors and medical labels saved to {embeddings_out}")
 
 if __name__ == "__main__":
-    cfg = load_config("config.yaml")
-    build_embedding_index(cfg)
+    config_path = str(Path(__file__).resolve().parent.parent / "config.yaml")
+    config = load_config(config_path)
+    build_biomed_embeddings(config)

@@ -38,11 +38,12 @@ def build_and_save_database(embeddings_file, save_location):
     vector_size = len(image_vectors[0])  # Should be 512 for CLIP model
     logger.info(f"   -> Successfully loaded {total_images} images, each compressed into {vector_size} numbers.")
 
-    logger.info("2. Building the blazing fast FAISS Search Database...")
-    # FAISS IndexFlatIP means it searches by "Cosine Similarity" (finding similar angles)
-    search_database = faiss.IndexFlatIP(vector_size)
+    logger.info("2. Building the blazing fast HNSW Search Database...")
+    # Advanced Graph Search algorithm instead of basic KNN
+    hnsw_m = settings["database"].get("hnsw_m", 32)
+    search_database = faiss.IndexHNSWFlat(vector_size, hnsw_m)
     
-    # Push all 10,000 images into the database
+    # Push all images into the HNSW graph
     search_database.add(image_vectors)
 
     logger.info("3. Saving the finished database so we can load it instantly in the future...")
@@ -74,8 +75,10 @@ def search_for_similar_images(query_vector, database, image_paths, top_k=5):
     # 'distances' = how similar they are (higher is better)
     # 'indices' = the row number of the winning image
     for similarity_score, row_number in zip(distances[0], indices[0]):
+        meta = image_paths[row_number] # This is now a rich dictionary!
         results.append({
-            "image_path": image_paths[row_number],
+            "image_path": meta["file_path"],
+            "diagnosis": meta["actual_diagnosis"],
             "similarity": float(similarity_score)
         })
     

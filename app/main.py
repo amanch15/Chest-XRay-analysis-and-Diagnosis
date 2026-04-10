@@ -16,7 +16,7 @@ load_dotenv(project_root / ".env")
 
 from src.utils import load_config
 import faiss
-from src.vision_encoder import load_clip_model, encode_image
+from src.vision_encoder import load_biomed_clip, encode_medical_image
 from src.vector_db import search_for_similar_images
 from src.llm_generator import generate_medical_report
 
@@ -35,20 +35,22 @@ st.markdown("Upload a raw X-Ray. The Vision AI will find the most mathematically
 def init_vision_model():
     model_name = config["encoder"]["model_name"]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, processor = load_clip_model(model_name, device)
+    model, processor = load_biomed_clip(model_name, device)
     return model, processor, device
 
 @st.cache_resource
 def init_faiss_db():
     index_path = config["paths"].get("faiss_index", "models/faiss_index.bin")
-    image_paths_file = config["paths"]["image_paths"]
     
     # Pull the binary memory database
     index = faiss.read_index(index_path)
     
-    # Pull the text list of image filenames
+    # Because we added Ground Truth, this is now a JSON file!
+    image_paths_file = config["paths"]["image_paths"].replace(".txt", ".json")
+    
+    import json
     with open(project_root / image_paths_file, 'r') as f:
-        image_paths = [line.strip() for line in f.readlines()]
+        image_paths = json.load(f)
         
     return index, image_paths
 
@@ -75,7 +77,7 @@ if uploaded_file is not None:
         
         # --- 1. Vision AI: Extract the Math ---
         with st.spinner("Analyzing image pixels with Vision Transformer..."):
-            query_vector = encode_image(temp_path, model, processor, device)
+            query_vector = encode_medical_image(temp_path, model, processor, device)
             
         # --- 2. FAISS: Search Database ---
         with st.spinner("Searching 10,000 historical cases instantly in FAISS db..."):

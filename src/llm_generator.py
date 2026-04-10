@@ -36,9 +36,9 @@ def generate_medical_report(user_query, similar_images_metadata):
         
     client = Groq(api_key=api_key)
     
-    # 2. Format the top 5 images we got from Week 3 into text
+    # 2. Format the top 5 images making sure we pass the OFFICIAL DIAGNOSIS
     context_text = "\n".join([
-        f"- Closest Match {i+1}: Found historical X-Ray Image at {img['image_path']} (Mathematical Similarity: {img['similarity']:.2f})"
+        f"- Closest Match {i+1}: Official Diagnosis is [{img['diagnosis']}] (Mathematical Similarity: {img['similarity']:.2f})"
         for i, img in enumerate(similar_images_metadata)
     ])
     

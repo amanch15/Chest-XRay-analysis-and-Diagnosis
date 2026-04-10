@@ -20,6 +20,12 @@ preprocessing:
 
 # ── Vision Encoder ───────────────────────────────────────────────
 encoder:
-  model_name:     "openai/clip-vit-base-patch32"  # HuggingFace CLIP
-  batch_size:     32
+  model_name:     "hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224"  # Dedicated Medical Foundation Model
+  batch_size:     16           # Lower batch size because BiomedCLIP is much heavier!
   device:         "auto"       # "auto" picks GPU if available, else CPU
+
+# ── Database & Re-ranking ────────────────────────────────────────
+database:
+  hnsw_m:         32           # Number of graph connections per node (standard is 32)
+  initial_pull:   50           # Grab top 50 matches instantly via HNSW
+  final_rerank:   3            # Re-Rank the top 50 down to the absolute True Top 3
