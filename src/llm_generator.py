@@ -1,9 +1,9 @@
 # pyre-ignore-all-errors
 """
-llm_generator.py — The AI Doctor (Upgraded to 70B)
+llm_generator.py — The AI Doctor (Upgraded to 3.3-70B)
 =================================================
 Week 4: This file takes the search results we got from the FAISS database
-and feeds them into an incredibly smart language model (Llama-3.1-70B via Groq).
+and feeds them into an incredibly smart language model (Llama-3.3-70B via Groq).
 The model then synthesizes those visual matches into a readable medical report!
 """
 
@@ -65,12 +65,12 @@ def generate_medical_report(user_query, similar_images_metadata):
         "Generate a formal radiological summary based strictly on this data."
     )
     
-    logger.info("Sending prompt to Groq (Llama-3.1-70B)...")
+    logger.info("Sending prompt to Groq (Llama-3.3-70B)...")
     
     # 4. Fire the prompt to the cloud and get the response instantly!
     try:
         completion = client.chat.completions.create(
-            model="llama-3.1-70b-versatile",   # Upgraded to the massive 70B parameter model for high-logic medical reasoning!
+            model="llama-3.3-70b-versatile",   # Upgraded to the massive Llama-3.3 70B model for state-of-the-art medical reasoning!
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -94,7 +94,7 @@ if __name__ == "__main__":
     load_dotenv() 
     
     print("\n" + "="*50)
-    print("🏥 Testing Groq Llama-3.1-70B Connection")
+    print("🏥 Testing Groq Llama-3.3-70B Connection")
     print("="*50)
     
     # We fake a query and fake some FAISS search results to test the pipeline!
