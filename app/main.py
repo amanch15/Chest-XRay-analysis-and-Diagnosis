@@ -54,7 +54,7 @@ def init_faiss_db():
         
     return index, image_paths
 
-with st.spinner("Warming up AI Models..."):
+with st.spinner("Coming UP ..."):
     model, processor, device = init_vision_model()
     faiss_index, image_db_paths = init_faiss_db()
 
@@ -72,7 +72,7 @@ if uploaded_file is not None:
     with open(temp_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
 
-    if st.sidebar.button("Run AI Analysis", type="primary"):
+    if st.sidebar.button("Run  Analysis", type="primary"):
         st.divider()
         
         # --- 1. Vision AI: Extract the Math ---
@@ -80,11 +80,11 @@ if uploaded_file is not None:
             query_vector = encode_medical_image(temp_path, model, processor, device)
             
         # --- 2. FAISS: Search Database ---
-        with st.spinner("Searching 10,000 historical cases instantly in FAISS db..."):
+        with st.spinner("Searching 10,000 historical cases instantly in ..."):
             # We want the Top 3 closest matches
             results = search_for_similar_images(query_vector, faiss_index, image_db_paths, top_k=3)
             
-        st.subheader("🔍 Closest Historical Matches Found")
+        st.subheader(" Closest Historical Matches Found")
         cols = st.columns(3)
         for i, match in enumerate(results):
             # Resolve absolute path to the processed image so Streamlit can draw it
@@ -93,10 +93,10 @@ if uploaded_file is not None:
             with cols[i]:
                 try:
                     matched_img = Image.open(absolute_img_path)
-                    st.image(matched_img, caption=f"Match {i+1} | Similarity: {match['similarity_score']:.2f}", use_column_width=True)
+                    st.image(matched_img, caption=f"Historical Match #{i+1}", use_container_width=True)
                 except Exception as e:
                     # Fallback if the path logic misaligned
-                    st.error(f"Image Missing! Tried looking at: {absolute_img_path}")
+                    st.error(f"Error: {repr(e)}. Path: {absolute_img_path}")
         
         # --- 3. LLM Generator: The AI Doctor ---
         st.subheader("🤖 AI Diagnostic Report (Llama-3)")

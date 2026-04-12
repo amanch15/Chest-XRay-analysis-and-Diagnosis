@@ -50,9 +50,9 @@ def main():
     embeddings = np.array(filtered_emb)
     metadata = filtered_meta
 
-    # 1. Isolate the 20% test Set (Exactly identical to the RAG split)
+    # 1. Isolate exactly the 15% Test Set to ensure Apples-to-Apples
     indices = np.arange(len(embeddings))
-    _, test_idx = train_test_split(indices, test_size=0.2, random_state=42)
+    _, test_idx = train_test_split(indices, test_size=0.15, random_state=42)
 
     query_embeddings = embeddings[test_idx]
     query_metadata = [metadata[i] for i in test_idx]

@@ -55,13 +55,12 @@ def evaluate_rag():
     metadata = filtered_meta
     logger.info(f"Isolated {len(metadata)} images restricted precisely to 5 essential classes.")
 
-    # 2. Strict 80/20 Train/Test Split
-    # We pretend 80% is our 'Historical Database' and 20% are 'New Uploads'
-    logger.info("Splitting dataset: 80% Historical Database | 20% Test Patients")
+    # 2. Strict 70/15/15 Train/Val/Test Split
+    logger.info("Splitting dataset: 70% Train | 15% Validation | 15% Test")
     
-    # We zip them so they stay glued together during the split
     indices = np.arange(len(embeddings))
-    train_idx, test_idx = train_test_split(indices, test_size=0.2, random_state=42)
+    train_temp, test_idx = train_test_split(indices, test_size=0.15, random_state=42)
+    train_idx, val_idx = train_test_split(train_temp, test_size=0.1764, random_state=42)
 
     db_embeddings = embeddings[train_idx]
     db_metadata = [metadata[i] for i in train_idx]
@@ -69,7 +68,8 @@ def evaluate_rag():
     query_embeddings = embeddings[test_idx]
     query_metadata = [metadata[i] for i in test_idx]
 
-    logger.info(f"Database Size: {len(db_embeddings)} X-Rays")
+    logger.info(f"Database (Train) Size: {len(db_embeddings)} X-Rays")
+    logger.info(f"Validation Set Size: {len(val_idx)} X-Rays (Ignored in zero-shot RAG)")
     logger.info(f"Test Set Size: {len(query_embeddings)} X-Rays")
 
     # 3. Build the Memory Database

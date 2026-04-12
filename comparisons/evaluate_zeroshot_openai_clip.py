@@ -53,7 +53,7 @@ def main():
 
    
     indices = np.arange(len(metadata))
-    _, test_idx = train_test_split(indices, test_size=0.2, random_state=42)
+    _, test_idx = train_test_split(indices, test_size=0.15, random_state=42)
 
     query_metadata = [metadata[i] for i in test_idx]
     y_true = [m["actual_diagnosis"] for m in query_metadata]

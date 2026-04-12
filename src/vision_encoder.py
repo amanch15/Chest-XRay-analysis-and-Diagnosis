@@ -17,7 +17,7 @@ from tqdm import tqdm
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Force the environment variables (like HF_TOKEN) to load immediately
+
 load_dotenv()
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -28,7 +28,7 @@ logger = get_logger(__name__, log_file="logs/vision_encoder.log")
 def load_biomed_clip(model_name: str, device: torch.device):
     """Loads the specialized BiomedCLIP model built specifically for medical research."""
     logger.info(f"Loading Medical Foundation Model: {model_name}")
-    # BiomedCLIP must be loaded via open_clip from the Huggingface Hub
+    # BiomedCLIP 
     model, _, preprocess = open_clip.create_model_and_transforms(model_name)
     model = model.to(device)
     model.eval()
