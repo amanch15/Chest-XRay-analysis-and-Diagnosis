@@ -94,7 +94,7 @@ if __name__ == "__main__":
     load_dotenv() 
     
     print("\n" + "="*50)
-    print("🏥 Testing Groq Llama-3.3-70B Connection")
+    print(" Testing Groq Llama-3.3-70B Connection")
     print("="*50)
     
     # We fake a query and fake some FAISS search results to test the pipeline!

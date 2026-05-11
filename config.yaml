@@ -20,12 +20,19 @@ preprocessing:
 
 # ── Vision Encoder ───────────────────────────────────────────────
 encoder:
-  model_name:     "hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224"  # Dedicated Medical Foundation Model
-  batch_size:     16           # Lower batch size because BiomedCLIP is much heavier!
+  model_name:     "hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224"
+  batch_size:     16
   device:         "auto"       # "auto" picks GPU if available, else CPU
+  use_dual_encoder: true       # Combine DenseNet121 (1024-dim) + BiomedCLIP (512-dim) = 1536-dim
+  embedding_dim:  1536         # Total joint embedding dimension
 
 # ── Database & Re-ranking ────────────────────────────────────────
 database:
-  hnsw_m:         32           # Number of graph connections per node (standard is 32)
+  hnsw_m:         32           # Number of graph connections per node
   initial_pull:   50           # Grab top 50 matches instantly via HNSW
-  final_rerank:   3            # Re-Rank the top 50 down to the absolute True Top 3
+  final_rerank:   3            # Final top-K after cross-encoder reranking
+
+# ── Cross-Encoder Reranker ───────────────────────────────────────
+reranker:
+  enabled:        true         # Use BiomedCLIP text encoder to rerank FAISS candidates
+  alpha:          0.6          # Weight for FAISS score (1-alpha = weight for text similarity)
