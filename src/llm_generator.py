@@ -108,12 +108,12 @@ Provide a 1-sentence justification.
         "Generate a complete formal radiology report based strictly on the retrieved evidence above."
     )
     
-    logger.info("Sending prompt to Groq (DeepSeek-R1-70B)...")
+    logger.info("Sending prompt to Groq (Qwen3-32B reasoning model)...")
     
     # 4. Fire the prompt to the cloud and get the response!
     try:
         completion = client.chat.completions.create(
-            model="deepseek-r1-distill-llama-70b",  # DeepSeek-R1: reasons through evidence before writing
+            model="qwen/qwen3-32b",   # Qwen3-32B: active reasoning model on Groq with chain-of-thought
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
