@@ -27,6 +27,7 @@ from src.vision_encoder import (
 from src.vector_db import search_for_similar_images
 from src.llm_generator import generate_medical_report
 from src.reranker import load_text_tokenizer, cross_encoder_rerank
+from src.explainability import generate_xai_heatmaps
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 config = load_config(str(project_root / "config.yaml"))
@@ -106,7 +107,34 @@ if uploaded_file is not None:
                 device
             )
 
-        # ── 2. FAISS Search (initial_pull = 50) ───────────────────────────────
+        # ── 2. XAI — Generate Heatmaps ────────────────────────────────────────
+        with st.spinner("Generating XAI Explainability Maps (GradCAM + Saliency)..."):
+            xai_results = generate_xai_heatmaps(
+                temp_path,
+                biomed_model, biomed_preprocess,
+                densenet_model, densenet_transform,
+                device
+            )
+            activated_region = xai_results["activated_region"]
+
+        # Display XAI section
+        st.subheader("🔍 XAI — Explainability Activation Maps")
+        xai_cols = st.columns(3)
+        with xai_cols[0]:
+            original_pil = Image.open(temp_path).resize((224, 224))
+            st.image(original_pil, caption="Original X-Ray", use_container_width=True)
+        with xai_cols[1]:
+            st.image(xai_results["densenet_overlay"],
+                     caption="CNN Feature Map (DenseNet121)", use_container_width=True)
+        with xai_cols[2]:
+            st.image(xai_results["biomed_overlay"],
+                     caption="ViT Saliency Map (BiomedCLIP)", use_container_width=True)
+
+        st.info(f"🎯 **Primary AI Activation Region: {activated_region}** — "
+                f"Both encoders show maximum focus on this anatomical zone.")
+        st.divider()
+
+        # ── 3. FAISS Search (initial_pull = 50) ───────────────────────────────
         initial_pull = config["database"].get("initial_pull", 50)
         final_top_k  = config["database"].get("final_rerank", 3)
 
@@ -144,7 +172,9 @@ if uploaded_file is not None:
         st.subheader("AI Diagnostic Report")
         with st.spinner("Sending matches to Groq for medical synthesis..."):
             final_report = generate_medical_report(
-                "Patient uploaded a new Chest X-Ray. What is the diagnosis?", results
+                "Patient uploaded a new Chest X-Ray. What is the diagnosis?",
+                results,
+                xai_region=activated_region
             )
             st.success(final_report)
 
