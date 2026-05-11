@@ -108,12 +108,12 @@ Provide a 1-sentence justification.
         "Generate a complete formal radiology report based strictly on the retrieved evidence above."
     )
     
-    logger.info("Sending prompt to Groq (Llama-3.3-70B)...")
+    logger.info("Sending prompt to Groq (DeepSeek-R1-70B)...")
     
-    # 4. Fire the prompt to the cloud and get the response instantly!
+    # 4. Fire the prompt to the cloud and get the response!
     try:
         completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",   # Upgraded to the massive Llama-3.3 70B model for state-of-the-art medical reasoning!
+            model="deepseek-r1-distill-llama-70b",  # DeepSeek-R1: reasons through evidence before writing
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -122,8 +122,14 @@ Provide a 1-sentence justification.
             max_tokens=2048,
             stream=False
         )
-        report = completion.choices[0].message.content
-        logger.info("✅ Successfully generated AI medical report!")
+        raw_report = completion.choices[0].message.content
+
+        # DeepSeek-R1 wraps its internal chain-of-thought in <think>...</think>.
+        # Strip it so only the clean clinical report is shown to the user.
+        import re
+        report = re.sub(r"<think>.*?</think>", "", raw_report, flags=re.DOTALL).strip()
+
+        logger.info("Successfully generated DeepSeek-R1 medical report!")
         return report
         
     except Exception as e:
