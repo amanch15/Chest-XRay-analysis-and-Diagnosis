@@ -83,17 +83,21 @@ class XRayDataset(Dataset):
 
 
 # ─── 3. DenseNet-121 Model (CheXNet Architecture) ─────────────────────────────
-def build_densenet121(num_classes: int, dropout: float = 0.4) -> nn.Module:
+def build_densenet121(num_classes: int, dropout: float = 0.5) -> nn.Module:
     """
     DenseNet-121 is the backbone of Stanford CheXNet (2017) which achieved
     radiologist-level performance on NIH ChestX-ray14.
-    Dropout=0.4 added before the classifier to prevent overfitting on rare classes.
+    FIX 3: Dropout increased from 0.4 → 0.5 to fight the massive overfitting.
+    Double dropout layers added for stronger regularization.
     """
     model = models.densenet121(weights=models.DenseNet121_Weights.IMAGENET1K_V1)
     in_features = model.classifier.in_features
     model.classifier = nn.Sequential(
         nn.Dropout(p=dropout),
-        nn.Linear(in_features, num_classes)
+        nn.Linear(in_features, 512),
+        nn.ReLU(),
+        nn.Dropout(p=0.3),        # Second dropout layer
+        nn.Linear(512, num_classes)
     )
     return model
 
@@ -127,17 +131,19 @@ def main():
         if p.endswith('.png')
     }
 
-    # All 14 NIH labels
+    # FIX 1: Remove classes with < 50 samples (Hernia=3, Pneumonia=3).
+    # No model can learn from 3 examples — they only poison the loss function.
     TARGET_CLASSES = {
         "Normal", "Atelectasis", "Consolidation", "Infiltration",
         "Pneumothorax", "Effusion", "Pleural_Thickening", "Mass",
-        "Nodule", "Emphysema", "Fibrosis", "Cardiomegaly", "Hernia", "Pneumonia"
+        "Nodule", "Emphysema", "Fibrosis", "Cardiomegaly"
     }
 
     # ── HARD CAP: Collect per-class samples separately ──────────────────────
-    # This prevents "No Finding" from eating 60% of every batch.
-    MAX_NORMAL_SAMPLES = 1500  # Hard cap on Normal class
-    MAX_OTHER_SAMPLES  = 2000  # Keep all rare disease samples (or cap if very large)
+    # FIX 2: Cap Normal more aggressively and also cap disease classes
+    # to force a tighter balance across all categories.
+    MAX_NORMAL_SAMPLES = 800   # Tighter cap on Normal to reduce class skew
+    MAX_OTHER_SAMPLES  = 800   # Cap diseases too — equal footing for all classes
 
     per_class_paths  = {c: [] for c in TARGET_CLASSES}
     per_class_labels = {c: [] for c in TARGET_CLASSES}
@@ -190,16 +196,18 @@ def main():
     )
 
     # ─── 7. Augmentation ─────────────────────────────────────────────────────
+    # FIX 4: More aggressive augmentation to close the train/val accuracy gap
     train_transforms = transforms.Compose([
         transforms.Resize((256, 256)),
         transforms.RandomCrop(224),
         transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(10),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2),
+        transforms.RandomVerticalFlip(p=0.1),
+        transforms.RandomRotation(15),                               # Wider rotation
+        transforms.ColorJitter(brightness=0.3, contrast=0.3),        # Stronger jitter
         transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0)),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-        transforms.RandomErasing(p=0.2, scale=(0.02, 0.1)),
+        transforms.RandomErasing(p=0.3, scale=(0.02, 0.2)),          # Stronger erasing
     ])
     eval_transforms = transforms.Compose([
         transforms.Resize((224, 224)),
@@ -210,15 +218,15 @@ def main():
     # NOTE: sampler and shuffle=True are mutually exclusive — use sampler only
     train_loader = DataLoader(
         XRayDataset(X_train, y_train, train_transforms),
-        batch_size=64, sampler=sampler, num_workers=2, pin_memory=True
+        batch_size=32, sampler=sampler, num_workers=2, pin_memory=True  # Smaller batch = better generalization
     )
     val_loader  = DataLoader(
         XRayDataset(X_val, y_val, eval_transforms),
-        batch_size=64, shuffle=False, num_workers=2, pin_memory=True
+        batch_size=32, shuffle=False, num_workers=2, pin_memory=True
     )
     test_loader = DataLoader(
         XRayDataset(X_test, y_test, eval_transforms),
-        batch_size=64, shuffle=False, num_workers=2, pin_memory=True
+        batch_size=32, shuffle=False, num_workers=2, pin_memory=True
     )
 
     # ─── 8. Focal Loss Class Weights (sqrt method for stability) ─────────────
@@ -229,20 +237,29 @@ def main():
     criterion = FocalLoss(class_weights=class_weights, gamma=2.0)
 
     # ─── 9. Model, Optimizer, Scheduler ──────────────────────────────────────
-    model = build_densenet121(num_classes=num_classes, dropout=0.4).cuda()
+    model = build_densenet121(num_classes=num_classes, dropout=0.5).cuda()
 
-    optimizer = optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
+    # FIX 5: Stronger weight decay (1e-4 → 3e-4) to penalize large weights
+    optimizer = optim.AdamW(model.parameters(), lr=3e-4, weight_decay=3e-4)
 
-    epochs    = 25
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
+    epochs    = 30
+    # FIX 6: OneCycleLR ramps up then down — much better convergence than CosineAnnealing
+    scheduler = optim.lr_scheduler.OneCycleLR(
+        optimizer, max_lr=3e-4,
+        steps_per_epoch=len(train_loader), epochs=epochs,
+        pct_start=0.3, anneal_strategy='cos'
+    )
     scaler    = GradScaler()
 
     # ─── 10. Training Loop ────────────────────────────────────────────────────
-    best_val_loss = float('inf')
+    # FIX 7: Save by best Val ACCURACY (not Val Loss) — the metric that actually matters
+    best_val_acc  = 0.0
+    early_stop_patience = 7   # Stop if val acc doesn't improve for 7 epochs
+    epochs_no_improve   = 0
     train_loss_hist, val_loss_hist = [], []
     train_acc_hist, val_acc_hist   = [], []
 
-    print(f"🧠 Training for {epochs} epochs...\n")
+    print(f"🧠 Training for {epochs} epochs (Early Stopping patience={early_stop_patience})...\n")
 
     for epoch in range(epochs):
         # ── TRAIN ──
@@ -262,6 +279,7 @@ def main():
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             scaler.step(optimizer)
             scaler.update()
+            scheduler.step()   # OneCycleLR steps per BATCH not per epoch
 
             train_loss   += loss.item()
             _, preds      = torch.max(outputs, 1)
@@ -288,24 +306,33 @@ def main():
         avg_val_loss = val_loss / len(val_loader)
         val_acc      = correct_val / total_val
         current_lr   = scheduler.get_last_lr()[0]
-        scheduler.step()
+        # OneCycleLR steps per batch — already stepped inside the train loop
+        # scheduler.step() is NOT called here for OneCycleLR
 
         train_loss_hist.append(avg_train_loss)
         val_loss_hist.append(avg_val_loss)
         train_acc_hist.append(train_acc)
         val_acc_hist.append(val_acc)
 
+        overfit_gap = (train_acc - val_acc) * 100
         print(
             f"Epoch [{epoch+1:02d}/{epochs}] "
             f"| Train Loss: {avg_train_loss:.4f} Acc: {train_acc*100:.1f}% "
             f"| Val Loss: {avg_val_loss:.4f} Acc: {val_acc*100:.1f}% "
-            f"| LR: {current_lr:.2e}"
+            f"| Gap: {overfit_gap:.1f}% | LR: {current_lr:.2e}"
         )
 
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
+        # FIX 7: Save by best Val ACCURACY
+        if val_acc > best_val_acc:
+            best_val_acc      = val_acc
+            epochs_no_improve = 0
             torch.save(model.state_dict(), "/kaggle/working/best_densenet121.pth")
-            print(f"   💾 Saved best model (Val Loss: {best_val_loss:.4f})")
+            print(f"   💾 Saved best model (Val Acc: {best_val_acc*100:.1f}%)")
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= early_stop_patience:
+                print(f"\n⏹️  Early stopping triggered at epoch {epoch+1} (no val acc improvement for {early_stop_patience} epochs)")
+                break
 
     # ─── 11. Final Test Evaluation ────────────────────────────────────────────
     print("\n✅ Evaluating Best Checkpoint on Test Set...")
