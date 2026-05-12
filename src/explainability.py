@@ -81,39 +81,48 @@ def gradcam_densenet(
         hook.remove()
 
 
-# ─── 2. BiomedCLIP Input Gradient Saliency Map ───────────────────────────────
+# ─── 2. BiomedCLIP SmoothGrad Saliency Map ───────────────────────────────────
 
 def saliency_biomedclip(
     image_path: str,
     biomed_model,
     biomed_preprocess,
-    device: torch.device
+    device: torch.device,
+    n_samples: int = 20,
+    noise_level: float = 0.10
 ) -> np.ndarray:
     """
-    Computes an input gradient saliency map through BiomedCLIP's ViT.
-    Backpropagates the norm of the output embedding to find which pixels
-    influenced the feature vector most — a well-established XAI technique.
+    SmoothGrad saliency for BiomedCLIP ViT.
+    Runs n_samples noisy forward passes and averages the gradients,
+    cancelling noise and converging on the spatially important region.
+    Reference: Smilkov et al., SmoothGrad 2017.
     """
     try:
-        image = Image.open(image_path).convert("RGB")
-        input_tensor = biomed_preprocess(image).unsqueeze(0).to(device)
-        input_tensor.requires_grad_(True)
+        image       = Image.open(image_path).convert("RGB")
+        base_tensor = biomed_preprocess(image).unsqueeze(0).to(device)
 
-        with torch.set_grad_enabled(True):
-            features = biomed_model.encode_image(input_tensor)
-            loss = features.norm()
-            loss.backward()
+        accumulated = torch.zeros_like(base_tensor)
+        sigma       = noise_level * (base_tensor.max() - base_tensor.min()).item()
 
-        # Gradient magnitude: max across RGB channels → [224, 224]
-        saliency = input_tensor.grad.data.abs().squeeze(0)  # [3, 224, 224]
-        saliency = saliency.max(dim=0)[0].cpu().numpy()      # [224, 224]
+        for _ in range(n_samples):
+            noisy = (base_tensor + torch.randn_like(base_tensor) * sigma).detach().requires_grad_(True)
+            with torch.set_grad_enabled(True):
+                loss = biomed_model.encode_image(noisy).norm()
+                loss.backward()
+            accumulated += noisy.grad.data.abs()
+
+        avg_grad = (accumulated / n_samples).squeeze(0)       # [3, H, W]
+        saliency = avg_grad.max(dim=0)[0].cpu().numpy()       # [H, W]
+
+        # Gaussian blur removes residual scatter
+        saliency = cv2.GaussianBlur(saliency, (11, 11), sigmaX=4)
 
         smin, smax = saliency.min(), saliency.max()
-        saliency = (saliency - smin) / (smax - smin + 1e-8)
+        saliency   = (saliency - smin) / (smax - smin + 1e-8)
         return saliency
 
     except Exception as e:
-        logger.error(f"BiomedCLIP saliency failed: {e}")
+        logger.error(f"BiomedCLIP SmoothGrad saliency failed: {e}")
         return np.zeros((224, 224), dtype=np.float32)
 
 
@@ -122,17 +131,21 @@ def saliency_biomedclip(
 def create_heatmap_overlay(
     image_path: str,
     heatmap: np.ndarray,
-    alpha: float = 0.5
+    alpha: float = 0.5,
+    colormap: int = cv2.COLORMAP_JET   # Overridable per model
 ) -> Image.Image:
     """
-    Blends a [0,1] float heatmap with the original image using JET colormap.
+    Blends a [0,1] float heatmap with the original image.
+    - DenseNet GradCAM    → COLORMAP_INFERNO (black→red→yellow) — warm/fire tones
+    - BiomedCLIP Saliency → COLORMAP_VIRIDIS (purple→blue→green) — cool tones
+    - Combined            → COLORMAP_JET     (blue→green→red)    — standard medical
     Returns a display-ready PIL image for Streamlit.
     """
     try:
         orig = np.array(Image.open(image_path).convert("RGB").resize((224, 224)))
 
         heatmap_uint8   = np.uint8(255 * heatmap)
-        heatmap_colored = cv2.applyColorMap(heatmap_uint8, cv2.COLORMAP_JET)
+        heatmap_colored = cv2.applyColorMap(heatmap_uint8, colormap)
         heatmap_colored = cv2.cvtColor(heatmap_colored, cv2.COLOR_BGR2RGB)
 
         overlay = (alpha * heatmap_colored + (1 - alpha) * orig).astype(np.uint8)
@@ -203,8 +216,21 @@ def generate_xai_heatmaps(
     dn_heatmap  = gradcam_densenet(image_path, densenet_model, densenet_transform, device)
     bio_heatmap = saliency_biomedclip(image_path, biomed_model, biomed_preprocess, device)
 
-    # Weighted combination: DenseNet (local CNN) + BiomedCLIP (global ViT)
-    combined = 0.6 * dn_heatmap + 0.4 * bio_heatmap
+    # Adaptive blending based on spatial correlation
+    # If CNN and ViT agree on the same region → use 50/50
+    # If they disagree strongly → trust CNN more (it's spatially more precise)
+    flat_dn  = dn_heatmap.flatten()
+    flat_bio = bio_heatmap.flatten()
+    correlation = float(np.corrcoef(flat_dn, flat_bio)[0, 1])
+    correlation = max(0.0, correlation)   # Clamp to [0, 1]
+
+    # When correlation=1.0 (perfect agreement): CNN_weight=0.5, ViT_weight=0.5
+    # When correlation=0.0 (total disagreement): CNN_weight=0.7, ViT_weight=0.3
+    cnn_weight = 0.7 - 0.2 * correlation
+    vit_weight = 1.0 - cnn_weight
+    logger.info(f"XAI spatial correlation: {correlation:.2f} → CNN:{cnn_weight:.2f} / ViT:{vit_weight:.2f}")
+
+    combined = cnn_weight * dn_heatmap + vit_weight * bio_heatmap
     norm = combined.max()
     if norm > 0:
         combined = combined / norm
@@ -215,8 +241,9 @@ def generate_xai_heatmaps(
         "densenet_heatmap":  dn_heatmap,
         "biomed_heatmap":    bio_heatmap,
         "combined_heatmap":  combined,
-        "densenet_overlay":  create_heatmap_overlay(image_path, dn_heatmap),
-        "biomed_overlay":    create_heatmap_overlay(image_path, bio_heatmap),
-        "combined_overlay":  create_heatmap_overlay(image_path, combined),
+        # Each model gets a distinct colormap for visual clarity in the UI
+        "densenet_overlay":  create_heatmap_overlay(image_path, dn_heatmap,  colormap=cv2.COLORMAP_INFERNO),
+        "biomed_overlay":    create_heatmap_overlay(image_path, bio_heatmap, colormap=cv2.COLORMAP_VIRIDIS),
+        "combined_overlay":  create_heatmap_overlay(image_path, combined,    colormap=cv2.COLORMAP_JET),
         "activated_region":  activated_region,
     }

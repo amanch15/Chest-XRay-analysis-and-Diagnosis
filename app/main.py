@@ -125,10 +125,12 @@ if uploaded_file is not None:
             st.image(original_pil, caption="Original X-Ray", use_container_width=True)
         with xai_cols[1]:
             st.image(xai_results["densenet_overlay"],
-                     caption="CNN Feature Map (DenseNet121)", use_container_width=True)
+                     caption="CNN GradCAM — DenseNet121 (🔴 INFERNO: Local texture focus)",
+                     use_container_width=True)
         with xai_cols[2]:
             st.image(xai_results["biomed_overlay"],
-                     caption="ViT Saliency Map (BiomedCLIP)", use_container_width=True)
+                     caption="ViT Saliency — BiomedCLIP (🟢 VIRIDIS: Global context focus)",
+                     use_container_width=True)
 
         st.info(f"🎯 **Primary AI Activation Region: {activated_region}** — "
                 f"Both encoders show maximum focus on this anatomical zone.")
