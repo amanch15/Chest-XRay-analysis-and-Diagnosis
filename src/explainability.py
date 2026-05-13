@@ -39,7 +39,8 @@ def gradcam_densenet(
     image_path: str,
     densenet_model,
     densenet_transform,
-    device: torch.device
+    device: torch.device,
+    spatial_prior: np.ndarray = None
 ) -> np.ndarray:
     """
     Hooks the last DenseBlock of DenseNet121 to capture spatial feature maps.
@@ -63,6 +64,18 @@ def gradcam_densenet(
 
         # feature maps shape: [1, 1024, 7, 7]
         feature_maps = activation_store["features"].squeeze(0)   # [1024, 7, 7]
+
+        # Top-Down Saliency Modulation (Soft Attention)
+        # If a ViT spatial prior is provided, gently weight the CNN feature maps.
+        # This tells the CNN to look near the ViT region, but lets it find its own local peak.
+        if spatial_prior is not None:
+            prior_7x7 = cv2.resize(spatial_prior, (7, 7), interpolation=cv2.INTER_AREA)
+            pmin, pmax = prior_7x7.min(), prior_7x7.max()
+            prior_7x7 = (prior_7x7 - pmin) / (pmax - pmin + 1e-8)
+            # Soft spotlight: base weight 0.2, peak 1.0. Doesn't hard-clip.
+            prior_7x7 = 0.2 + 0.8 * prior_7x7
+            prior_tensor = torch.tensor(prior_7x7, device=feature_maps.device, dtype=feature_maps.dtype)
+            feature_maps = feature_maps * prior_tensor
 
         # Use only the TOP 20% most-activated channels (not all 1024 averaged equally)
         # This prevents low-activation channels from diluting the pathological signal
@@ -233,10 +246,13 @@ def generate_xai_heatmaps(
       - combined_overlay   : PIL image — combined heatmap blended on X-ray
       - activated_region   : string name of highest-activation anatomical zone
     """
-    logger.info("Running XAI pipeline (SmoothGrad + GradCAM)...")
+    logger.info("Running XAI pipeline (Top-Down Attention: ViT guiding CNN)...")
 
+    # Step 1: ViT Saliency first — identifies the BROAD zone of interest
     bio_heatmap = saliency_biomedclip(image_path, biomed_model, biomed_preprocess, device)
-    dn_heatmap  = gradcam_densenet(image_path, densenet_model, densenet_transform, device)
+    
+    # Step 2: CNN GradCAM second — identifies LOCAL precise feature, gently guided by ViT
+    dn_heatmap  = gradcam_densenet(image_path, densenet_model, densenet_transform, device, spatial_prior=bio_heatmap)
 
     # Adaptive blending based on spatial correlation
     flat_dn  = dn_heatmap.flatten()
