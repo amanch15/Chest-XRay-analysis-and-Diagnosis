@@ -82,12 +82,7 @@ def gradcam_densenet(
         # Smooth out blocky CNN artifacts with moderate Gaussian blur
         heatmap = cv2.GaussianBlur(heatmap, (15, 15), sigmaX=5)
 
-        # Percentile thresholding: suppress low-activation noise (bottom 60%)
-        # This removes artifact blobs and keeps only meaningful activations
-        threshold = np.percentile(heatmap, 70)
-        heatmap = np.where(heatmap >= threshold, heatmap, 0.0)
-
-        # Re-normalize after thresholding
+        # Normalize the raw smooth heatmap (thresholding happens later after ViT masking)
         hmin, hmax = heatmap.min(), heatmap.max()
         heatmap = (heatmap - hmin) / (hmax - hmin + 1e-8)
         return heatmap
@@ -238,26 +233,46 @@ def generate_xai_heatmaps(
       - combined_overlay   : PIL image — combined heatmap blended on X-ray
       - activated_region   : string name of highest-activation anatomical zone
     """
-    logger.info("Running XAI pipeline (GradCAM + Saliency)...")
+    logger.info("Running XAI pipeline (SmoothGrad + ViT-Guided GradCAM)...")
 
-    dn_heatmap  = gradcam_densenet(image_path, densenet_model, densenet_transform, device)
+    # Step 1: ViT Saliency first — identifies the BROAD zone of interest
     bio_heatmap = saliency_biomedclip(image_path, biomed_model, biomed_preprocess, device)
 
+    # Step 2: CNN GradCAM second — identifies LOCAL texture features
+    dn_heatmap  = gradcam_densenet(image_path, densenet_model, densenet_transform, device)
+
+    # Step 3: ViT-Guided CNN Masking
+    # The ViT map defines the anatomical zone. We mask the raw CNN map to only
+    # show activations that fall WITHIN that zone. This enforces spatial agreement:
+    # ViT = broad zone, CNN = precise local feature inside that same zone.
+    vit_zone_mask = (bio_heatmap > 0).astype(np.float32)
+    if vit_zone_mask.sum() == 0:
+        vit_zone_mask = np.ones_like(dn_heatmap)
+        
+    dn_heatmap_guided = dn_heatmap * vit_zone_mask
+
+    # Threshold the guided CNN map to find the strongest local features INSIDE the zone
+    if (dn_heatmap_guided > 0).any():
+        threshold = np.percentile(dn_heatmap_guided[dn_heatmap_guided > 0], 50)
+        dn_heatmap_guided = np.where(dn_heatmap_guided >= threshold, dn_heatmap_guided, 0.0)
+
+    # Re-normalize the guided CNN map
+    gmin, gmax = dn_heatmap_guided.min(), dn_heatmap_guided.max()
+    if gmax > gmin:
+        dn_heatmap_guided = (dn_heatmap_guided - gmin) / (gmax - gmin + 1e-8)
+
+    logger.info("ViT-Guided masking applied — CNN constrained to ViT zone.")
+
     # Adaptive blending based on spatial correlation
-    # If CNN and ViT agree on the same region → use 50/50
-    # If they disagree strongly → trust CNN more (it's spatially more precise)
-    flat_dn  = dn_heatmap.flatten()
+    flat_dn  = dn_heatmap_guided.flatten()
     flat_bio = bio_heatmap.flatten()
     correlation = float(np.corrcoef(flat_dn, flat_bio)[0, 1])
-    correlation = max(0.0, correlation)   # Clamp to [0, 1]
-
-    # When correlation=1.0 (perfect agreement): CNN_weight=0.5, ViT_weight=0.5
-    # When correlation=0.0 (total disagreement): CNN_weight=0.7, ViT_weight=0.3
+    correlation = max(0.0, correlation)
     cnn_weight = 0.7 - 0.2 * correlation
     vit_weight = 1.0 - cnn_weight
     logger.info(f"XAI spatial correlation: {correlation:.2f} → CNN:{cnn_weight:.2f} / ViT:{vit_weight:.2f}")
 
-    combined = cnn_weight * dn_heatmap + vit_weight * bio_heatmap
+    combined = cnn_weight * dn_heatmap_guided + vit_weight * bio_heatmap
     norm = combined.max()
     if norm > 0:
         combined = combined / norm
@@ -265,12 +280,13 @@ def generate_xai_heatmaps(
     activated_region = detect_activated_region(combined)
 
     return {
-        "densenet_heatmap":  dn_heatmap,
+        "densenet_heatmap":  dn_heatmap_guided,
         "biomed_heatmap":    bio_heatmap,
         "combined_heatmap":  combined,
         # Each model gets a distinct colormap for visual clarity in the UI
-        "densenet_overlay":  create_heatmap_overlay(image_path, dn_heatmap,  colormap=cv2.COLORMAP_INFERNO),
-        "biomed_overlay":    create_heatmap_overlay(image_path, bio_heatmap, colormap=cv2.COLORMAP_VIRIDIS),
-        "combined_overlay":  create_heatmap_overlay(image_path, combined,    colormap=cv2.COLORMAP_JET),
+        # BUGFIX: Pass the guided CNN map to the overlay, not the raw one
+        "densenet_overlay":  create_heatmap_overlay(image_path, dn_heatmap_guided, colormap=cv2.COLORMAP_INFERNO),
+        "biomed_overlay":    create_heatmap_overlay(image_path, bio_heatmap,       colormap=cv2.COLORMAP_VIRIDIS),
+        "combined_overlay":  create_heatmap_overlay(image_path, combined,          colormap=cv2.COLORMAP_JET),
         "activated_region":  activated_region,
     }
