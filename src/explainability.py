@@ -63,7 +63,13 @@ def gradcam_densenet(
 
         # feature maps shape: [1, 1024, 7, 7]
         feature_maps = activation_store["features"].squeeze(0)   # [1024, 7, 7]
-        heatmap = feature_maps.mean(dim=0).cpu().numpy()          # [7, 7]
+
+        # Use only the TOP 20% most-activated channels (not all 1024 averaged equally)
+        # This prevents low-activation channels from diluting the pathological signal
+        channel_importance = feature_maps.mean(dim=[-2, -1])      # [1024] mean per channel
+        top_k_channels     = int(0.2 * feature_maps.shape[0])     # Top 20% = 205 channels
+        top_indices        = torch.topk(channel_importance, top_k_channels).indices
+        heatmap = feature_maps[top_indices].mean(dim=0).cpu().numpy()  # [7, 7]
 
         # Normalize to [0, 1]
         heatmap = np.maximum(heatmap, 0)
@@ -78,7 +84,7 @@ def gradcam_densenet(
 
         # Percentile thresholding: suppress low-activation noise (bottom 60%)
         # This removes artifact blobs and keeps only meaningful activations
-        threshold = np.percentile(heatmap, 60)
+        threshold = np.percentile(heatmap, 70)
         heatmap = np.where(heatmap >= threshold, heatmap, 0.0)
 
         # Re-normalize after thresholding
@@ -130,9 +136,9 @@ def saliency_biomedclip(
         # The patch grid is a ViT artifact — strong blur merges patches into regions
         saliency = cv2.GaussianBlur(saliency, (31, 31), sigmaX=12)
 
-        # Percentile thresholding: keep only top 25% activations
-        # This suppresses the uniform background glow the ViT produces
-        threshold = np.percentile(saliency, 75)
+        # Percentile thresholding: keep only top 10% activations
+        # Forces the ViT map to show a specific region, not the whole lung
+        threshold = np.percentile(saliency, 90)
         saliency  = np.where(saliency >= threshold, saliency, 0.0)
 
         # Final gentle smoothing to clean edges
