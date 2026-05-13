@@ -213,12 +213,15 @@ def detect_activated_region(heatmap: np.ndarray) -> str:
     h3, w2 = h // 3, w // 2
 
     zones = {
-        "Right Upper Lobe (RUL)":   heatmap[:h3,    w2:],
-        "Left Upper Lobe (LUL)":    heatmap[:h3,    :w2],
-        "Right Middle Lobe (RML)":  heatmap[h3:2*h3, w2:],
-        "Left Lingula":             heatmap[h3:2*h3, :w2],
-        "Right Lower Lobe (RLL)":   heatmap[2*h3:,   w2:],
-        "Left Lower Lobe (LLL)":    heatmap[2*h3:,   :w2],
+        # Image Left (:w2) = Patient's Right Lung
+        "Right Upper Lobe (RUL)":   heatmap[:h3,    :w2],
+        "Right Middle Lobe (RML)":  heatmap[h3:2*h3, :w2],
+        "Right Lower Lobe (RLL)":   heatmap[2*h3:,   :w2],
+        
+        # Image Right (w2:) = Patient's Left Lung
+        "Left Upper Lobe (LUL)":    heatmap[:h3,    w2:],
+        "Left Lingula":             heatmap[h3:2*h3, w2:],
+        "Left Lower Lobe (LLL)":    heatmap[2*h3:,   w2:],
     }
 
     activated = max(zones.items(), key=lambda x: float(x[1].mean()))
