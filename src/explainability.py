@@ -70,8 +70,20 @@ def gradcam_densenet(
         hmin, hmax = heatmap.min(), heatmap.max()
         heatmap = (heatmap - hmin) / (hmax - hmin + 1e-8)
 
-        # Upsample to 224x224
+        # Upsample to 224x224 with smooth cubic interpolation
         heatmap = cv2.resize(heatmap, (224, 224), interpolation=cv2.INTER_CUBIC)
+
+        # Smooth out blocky CNN artifacts with moderate Gaussian blur
+        heatmap = cv2.GaussianBlur(heatmap, (15, 15), sigmaX=5)
+
+        # Percentile thresholding: suppress low-activation noise (bottom 60%)
+        # This removes artifact blobs and keeps only meaningful activations
+        threshold = np.percentile(heatmap, 60)
+        heatmap = np.where(heatmap >= threshold, heatmap, 0.0)
+
+        # Re-normalize after thresholding
+        hmin, hmax = heatmap.min(), heatmap.max()
+        heatmap = (heatmap - hmin) / (hmax - hmin + 1e-8)
         return heatmap
 
     except Exception as e:
@@ -114,7 +126,16 @@ def saliency_biomedclip(
         avg_grad = (accumulated / n_samples).squeeze(0)       # [3, H, W]
         saliency = avg_grad.max(dim=0)[0].cpu().numpy()       # [H, W]
 
-        # Gaussian blur removes residual scatter
+        # Heavy Gaussian blur to eliminate the ViT 16x16 patch grid checkerboard
+        # The patch grid is a ViT artifact — strong blur merges patches into regions
+        saliency = cv2.GaussianBlur(saliency, (31, 31), sigmaX=12)
+
+        # Percentile thresholding: keep only top 25% activations
+        # This suppresses the uniform background glow the ViT produces
+        threshold = np.percentile(saliency, 75)
+        saliency  = np.where(saliency >= threshold, saliency, 0.0)
+
+        # Final gentle smoothing to clean edges
         saliency = cv2.GaussianBlur(saliency, (11, 11), sigmaX=4)
 
         smin, smax = saliency.min(), saliency.max()
